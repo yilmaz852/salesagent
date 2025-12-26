@@ -294,8 +294,10 @@ function woo_sales_agent_login_redirect() {
     if (in_array('sales_agent', $user->roles) && !get_user_meta($user->ID, '_sales_agent_redirected', true)) {
         update_user_meta($user->ID, '_sales_agent_redirected', true);
         
-        // Clear redirect flag after 5 minutes
-        wp_schedule_single_event(time() + 300, 'woo_clear_redirect_flag', [$user->ID]);
+        // Clear redirect flag after 5 minutes - check if event already scheduled
+        if (!wp_next_scheduled('woo_clear_redirect_flag', [$user->ID])) {
+            wp_schedule_single_event(time() + 300, 'woo_clear_redirect_flag', [$user->ID]);
+        }
         
         if (!isset($_GET['page']) || $_GET['page'] !== 'sales-agent-dashboard') {
             wp_safe_redirect(admin_url('admin.php?page=sales-agent-dashboard'));
@@ -420,8 +422,8 @@ function woo_sales_agent_earnings_callback() {
     echo '<input type="submit" value="View Earnings" class="button button-primary">';
     echo '</form><br />';
     
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        if (!isset($_POST['woo_agent_earnings_nonce']) || !wp_verify_nonce($_POST['woo_agent_earnings_nonce'], 'woo_agent_earnings_action')) {
+    if (isset($_POST['woo_agent_earnings_nonce'])) {
+        if (!wp_verify_nonce($_POST['woo_agent_earnings_nonce'], 'woo_agent_earnings_action')) {
             echo '<div class="notice notice-error"><p>Security check failed.</p></div>';
             echo '</div>';
             return;
@@ -466,8 +468,10 @@ function woo_generate_agent_earnings_report($sales_agent_id, $start_date, $end_d
         return '<p>No orders found for the selected period.</p>';
     }
     
+    // Calculate totals and store order data in single loop
     $total_commission = 0;
     $net_subtotal_sum = 0;
+    $order_data = [];
     
     foreach ($orders as $order_post) {
         $order = wc_get_order($order_post->ID);
@@ -490,6 +494,13 @@ function woo_generate_agent_earnings_report($sales_agent_id, $start_date, $end_d
         
         $total_commission += $commission;
         $net_subtotal_sum += $net_item_subtotal;
+        
+        // Store for display
+        $order_data[] = [
+            'order' => $order,
+            'net_subtotal' => $net_item_subtotal,
+            'commission' => $commission,
+        ];
     }
     
     // Display summary
@@ -500,35 +511,18 @@ function woo_generate_agent_earnings_report($sales_agent_id, $start_date, $end_d
     $output .= '<strong>Total Commission (' . ($commission_rate * 100) . '%)</strong><br />' . wc_price($total_commission) . '</div>';
     $output .= '</div>';
     
-    // Order table
+    // Order table using cached data
     $output .= '<table class="widefat">';
     $output .= '<thead><tr><th>Order ID</th><th>Date</th><th>Status</th><th>Net Subtotal</th><th>Commission</th></tr></thead><tbody>';
     
-    foreach ($orders as $order_post) {
-        $order = wc_get_order($order_post->ID);
-        $refund_ids = woo_get_refund_ids($order->get_id());
-        
-        $items_subtotal = floatval($order->get_subtotal());
-        $refund_subtotal = 0;
-        
-        foreach ($refund_ids as $refund_id) {
-            $refund_data = woo_get_refund_item_totals($refund_id);
-            $refund_subtotal += abs(floatval($refund_data['subtotal']));
-        }
-        
-        $net_item_subtotal = $items_subtotal - $refund_subtotal;
-        if ($net_item_subtotal < 0) {
-            $net_item_subtotal = 0;
-        }
-        
-        $commission = $net_item_subtotal * $commission_rate;
-        
+    foreach ($order_data as $data) {
+        $order = $data['order'];
         $output .= '<tr>';
         $output .= '<td>#' . esc_html($order->get_id()) . '</td>';
         $output .= '<td>' . esc_html($order->get_date_created()->date('Y-m-d')) . '</td>';
         $output .= '<td>' . esc_html(wc_get_order_status_name($order->get_status())) . '</td>';
-        $output .= '<td>' . wc_price($net_item_subtotal) . '</td>';
-        $output .= '<td>' . wc_price($commission) . '</td>';
+        $output .= '<td>' . wc_price($data['net_subtotal']) . '</td>';
+        $output .= '<td>' . wc_price($data['commission']) . '</td>';
         $output .= '</tr>';
     }
     
@@ -640,7 +634,6 @@ function woo_add_sales_agent_fields($user) {
     
     $is_sales_agent = in_array('sales_agent', $user->roles);
     $commission_rate = get_user_meta($user->ID, 'sales_agent_commission_rate', true) ?: 3;
-    $all_users = get_users(['role__not_in' => ['administrator', 'sales_agent']]);
     $assigned_agent = get_user_meta($user->ID, 'assigned_sales_agent', true);
     
     echo '<h3>Sales Agent Settings</h3>';
@@ -650,8 +643,8 @@ function woo_add_sales_agent_fields($user) {
         echo '<tr>';
         echo '<th><label for="sales_agent_commission_rate">Commission Rate (%)</label></th>';
         echo '<td>';
-        echo '<input type="number" step="0.01" name="sales_agent_commission_rate" id="sales_agent_commission_rate" value="' . esc_attr($commission_rate) . '" class="regular-text" />';
-        echo '<p class="description">Commission percentage for this sales agent (e.g., 3 for 3%)</p>';
+        echo '<input type="number" step="0.01" min="0" max="100" name="sales_agent_commission_rate" id="sales_agent_commission_rate" value="' . esc_attr($commission_rate) . '" class="regular-text" />';
+        echo '<p class="description">Commission percentage for this sales agent (e.g., 3 for 3%). Must be between 0 and 100.</p>';
         echo '</td>';
         echo '</tr>';
     }
@@ -687,7 +680,11 @@ function woo_save_sales_agent_fields($user_id) {
     }
     
     if (isset($_POST['sales_agent_commission_rate'])) {
-        update_user_meta($user_id, 'sales_agent_commission_rate', floatval($_POST['sales_agent_commission_rate']));
+        $rate = floatval($_POST['sales_agent_commission_rate']);
+        // Validate commission rate (0-100)
+        if ($rate >= 0 && $rate <= 100) {
+            update_user_meta($user_id, 'sales_agent_commission_rate', $rate);
+        }
     }
     
     if (isset($_POST['assigned_sales_agent'])) {
@@ -733,13 +730,18 @@ function woo_assign_order_to_sales_agent($order_id) {
 add_action('wp_footer', 'woo_sales_agent_acting_notice');
 
 function woo_sales_agent_acting_notice() {
-    if (!WC()->session) {
+    // Check if WooCommerce and sessions are available
+    if (!function_exists('WC') || !WC() || !WC()->session) {
         return;
     }
     
     $acting_as = WC()->session->get('sales_agent_acting_as_customer');
     if ($acting_as) {
         $customer = get_userdata($acting_as);
+        if (!$customer) {
+            return;
+        }
+        
         echo '<div style="position: fixed; top: 32px; left: 0; right: 0; background: #ff9800; color: white; padding: 10px; text-align: center; z-index: 999999; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">';
         echo '<strong>Sales Agent Mode:</strong> You are currently shopping as ' . esc_html($customer->display_name) . ' (' . esc_html($customer->user_email) . ')';
         echo ' | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '" style="color: white; text-decoration: underline;">Exit Customer View</a>';
