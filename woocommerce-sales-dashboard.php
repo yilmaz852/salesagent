@@ -292,32 +292,28 @@ function woo_get_refund_item_totals($refund_id) {
 // SALES AGENT SYSTEM - Enhanced Features (v2.0)
 // ============================================================================
 
-// 1. Login redirect for sales agents - redirect to custom frontend page
-add_action('admin_init', 'woo_sales_agent_login_redirect');
+// 1. Redirect sales agents on login - completely bypass WordPress admin
+add_filter('login_redirect', 'woo_sales_agent_login_redirect', 10, 3);
+add_action('admin_init', 'woo_sales_agent_block_admin_access');
 
-function woo_sales_agent_login_redirect() {
-    $user = wp_get_current_user();
-    
-    // Only redirect sales agents to custom dashboard page, not admin
-    if (in_array('sales_agent', $user->roles) && !get_user_meta($user->ID, '_sales_agent_redirected', true)) {
-        update_user_meta($user->ID, '_sales_agent_redirected', true);
-        
-        // Clear redirect flag after 5 minutes - check if event already scheduled
-        if (!wp_next_scheduled('woo_clear_redirect_flag', [$user->ID])) {
-            wp_schedule_single_event(time() + 300, 'woo_clear_redirect_flag', [$user->ID]);
-        }
-        
-        // Redirect to custom frontend dashboard instead of admin
-        wp_safe_redirect(home_url('/sales-agent-dashboard/'));
-        exit;
+function woo_sales_agent_login_redirect($redirect_to, $request, $user) {
+    // Check if user has sales_agent role
+    if (isset($user->roles) && is_array($user->roles) && in_array('sales_agent', $user->roles)) {
+        // Redirect directly to custom dashboard, not admin
+        return home_url('/sales-agent-dashboard/');
     }
+    
+    return $redirect_to;
 }
 
-// Clear redirect flag
-add_action('woo_clear_redirect_flag', 'woo_clear_sales_agent_redirect_flag');
-
-function woo_clear_sales_agent_redirect_flag($user_id) {
-    delete_user_meta($user_id, '_sales_agent_redirected');
+function woo_sales_agent_block_admin_access() {
+    $user = wp_get_current_user();
+    
+    // Block sales agents from accessing admin area entirely
+    if (in_array('sales_agent', $user->roles) && is_admin() && !wp_doing_ajax()) {
+        wp_redirect(home_url('/sales-agent-dashboard/'));
+        exit;
+    }
 }
 
 // 2. Add sales agent menu items
@@ -644,6 +640,13 @@ function woo_render_frontend_dashboard_customers($user) {
             $customer_agent = get_user_meta($customer_id, 'assigned_sales_agent', true);
             if ($customer_agent == $user->ID) {
                 update_user_meta($user->ID, '_acting_as_customer', $customer_id);
+                
+                // If shop_now parameter is set, redirect to shop
+                if (isset($_GET['shop_now'])) {
+                    wp_redirect(wc_get_page_permalink('shop'));
+                    exit;
+                }
+                
                 echo '<div class="notice notice-success">You are now acting as ' . esc_html(get_userdata($customer_id)->display_name) . '. <a href="' . esc_url(wc_get_page_permalink('shop')) . '">Go to Shop</a></div>';
             }
         }
@@ -689,8 +692,9 @@ function woo_render_frontend_dashboard_customers($user) {
         echo '<td>' . wc_price($total_spent) . '</td>';
         echo '<td>';
         $switch_url = home_url('/sales-agent-dashboard/customers/?switch_to_customer=' . $customer->ID . '&_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
+        $shop_url = home_url('/sales-agent-dashboard/customers/?switch_to_customer=' . $customer->ID . '&shop_now=1&_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
         echo '<a href="' . esc_url($switch_url) . '" class="button button-small">Act as Customer</a> ';
-        echo '<a href="' . esc_url(wc_get_page_permalink('shop')) . '" class="button button-small">Shop Now</a>';
+        echo '<a href="' . esc_url($shop_url) . '" class="button button-small">Shop Now</a>';
         echo '</td>';
         echo '</tr>';
     }
@@ -1158,6 +1162,23 @@ function woo_save_sales_agent_fields($user_id) {
 // 11. Override WooCommerce customer when sales agent is acting as customer
 add_filter('woocommerce_cart_hash', 'woo_sales_agent_cart_hash', 10, 2);
 add_action('init', 'woo_sales_agent_sync_session', 20);
+add_filter('woocommerce_customer_get_id', 'woo_sales_agent_override_wc_customer_id', 99);
+
+function woo_sales_agent_override_wc_customer_id($customer_id) {
+    // Only override on frontend for WooCommerce operations
+    if (!is_admin() && is_user_logged_in()) {
+        $user_id = wp_get_current_user()->ID;
+        
+        // Check if this is the sales agent (not already overridden)
+        if (in_array('sales_agent', wp_get_current_user()->roles)) {
+            $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
+            if ($acting_as) {
+                return intval($acting_as);
+            }
+        }
+    }
+    return $customer_id;
+}
 
 function woo_sales_agent_sync_session() {
     // Sync user meta to WC session on frontend
@@ -1173,10 +1194,12 @@ function woo_sales_agent_sync_session() {
 }
 
 function woo_sales_agent_cart_hash($hash, $cart) {
-    $user_id = get_current_user_id();
-    $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
-    if ($acting_as) {
-        $hash .= '_agent_' . $acting_as;
+    if (is_user_logged_in()) {
+        $user_id = get_current_user_id();
+        $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
+        if ($acting_as) {
+            $hash .= '_agent_' . $acting_as;
+        }
     }
     return $hash;
 }
