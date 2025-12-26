@@ -1,0 +1,85 @@
+=== WooCommerce Sales Dashboard ===
+Contributors: yilmaz852
+Tags: woocommerce, sales, dashboard, reports, commission, refunds
+Requires at least: 5.0
+Tested up to: 6.4
+Requires PHP: 7.2
+Stable tag: 1.0.0
+License: GPLv2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
+
+A comprehensive sales dashboard for WooCommerce with detailed reporting, commission tracking, and refund calculations.
+
+== Description ==
+
+WooCommerce Sales Dashboard provides a powerful admin interface for tracking sales performance, calculating commissions, and analyzing order data with advanced filtering options.
+
+**Key Features:**
+
+* Filter reports by sales agent
+* Date range selection
+* Exclude specific order statuses
+* Calculate gross totals and refunds
+* Track net subtotals after refunds
+* Automatic commission calculation (3%)
+* Visual metric widgets
+* Detailed order-by-order breakdown
+
+**Perfect For:**
+
+* Sales managers tracking team performance
+* Business owners monitoring revenue
+* Accountants calculating commissions
+* Anyone needing detailed WooCommerce sales reports
+
+== Installation ==
+
+1. Upload `woocommerce-sales-dashboard.php` to the `/wp-content/plugins/` directory
+2. Activate the plugin through the 'Plugins' menu in WordPress
+3. Ensure WooCommerce is active
+4. Navigate to 'Sales Dashboard' in the admin menu
+
+== Frequently Asked Questions ==
+
+= Does this plugin require WooCommerce? =
+
+Yes, WooCommerce must be installed and active for this plugin to work.
+
+= What is the 'sales_agent' role? =
+
+This is a custom user role that should be assigned to your sales team members. The plugin filters orders based on the 'wcb2bsa_sales_agent' meta key.
+
+= How is commission calculated? =
+
+Commission is calculated as 3% of the Net Item Subtotal (Item Subtotal minus Refund Subtotal).
+
+= Can I exclude certain order statuses? =
+
+Yes, you can select which order statuses to exclude from the report using checkboxes in the form.
+
+= What date range is used by default? =
+
+By default, the report shows data from the first day of the current month to today.
+
+== Screenshots ==
+
+1. Sales Dashboard main page with filters and report
+2. Metric widgets showing key performance indicators
+3. Detailed order table with all calculations
+
+== Changelog ==
+
+= 1.0.0 =
+* Initial release
+* Sales agent filtering functionality
+* Date range selection
+* Order status exclusion
+* Metric calculations (gross, refund, net, commission)
+* Visual dashboard with widgets
+* Secure form handling with nonce verification
+* Proper data sanitization and escaping
+
+== Upgrade Notice ==
+
+= 1.0.0 =
+Initial release of WooCommerce Sales Dashboard plugin.
