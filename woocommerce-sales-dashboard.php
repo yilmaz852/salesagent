@@ -555,9 +555,8 @@ function woo_sales_agent_customers_callback() {
             // Verify this customer is assigned to this agent
             $customer_agent = get_user_meta($customer_id, 'assigned_sales_agent', true);
             if ($customer_agent == $user->ID) {
-                // Store the switch in session
-                WC()->session->set('sales_agent_acting_as_customer', $customer_id);
-                WC()->session->set('sales_agent_original_user', $user->ID);
+                // Store the switch using WordPress options (not WC session in admin)
+                update_user_meta($user->ID, '_acting_as_customer', $customer_id);
                 
                 echo '<div class="notice notice-success"><p>You are now acting as ' . esc_html(get_userdata($customer_id)->display_name) . '. <a href="' . esc_url(wc_get_page_permalink('shop')) . '">Go to Shop</a> | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></p></div>';
             }
@@ -567,17 +566,18 @@ function woo_sales_agent_customers_callback() {
     // Handle stop switch
     if (isset($_GET['stop_switch']) && isset($_GET['_wpnonce'])) {
         if (wp_verify_nonce($_GET['_wpnonce'], 'stop_switch')) {
-            WC()->session->set('sales_agent_acting_as_customer', null);
-            WC()->session->set('sales_agent_original_user', null);
+            delete_user_meta($user->ID, '_acting_as_customer');
             echo '<div class="notice notice-info"><p>You are no longer acting as a customer.</p></div>';
         }
     }
     
     // Check if currently acting as customer
-    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    $acting_as = get_user_meta($user->ID, '_acting_as_customer', true);
     if ($acting_as) {
         $customer_user = get_userdata($acting_as);
-        echo '<div class="notice notice-warning"><p><strong>Currently Acting As:</strong> ' . esc_html($customer_user->display_name) . ' (' . esc_html($customer_user->user_email) . ') | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></p></div>';
+        if ($customer_user) {
+            echo '<div class="notice notice-warning"><p><strong>Currently Acting As:</strong> ' . esc_html($customer_user->display_name) . ' (' . esc_html($customer_user->user_email) . ') | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></p></div>';
+        }
     }
     
     // Display customer table
@@ -585,7 +585,6 @@ function woo_sales_agent_customers_callback() {
     echo '<thead><tr><th>Customer</th><th>Email</th><th>Total Orders</th><th>Total Spent</th><th>Actions</th></tr></thead><tbody>';
     
     foreach ($customers as $customer) {
-        $customer_obj = new WC_Customer($customer->ID);
         $order_count = wc_get_customer_order_count($customer->ID);
         $total_spent = wc_get_customer_total_spent($customer->ID);
         
@@ -699,9 +698,24 @@ function woo_save_sales_agent_fields($user_id) {
 
 // 11. Override WooCommerce customer when sales agent is acting as customer
 add_filter('woocommerce_cart_hash', 'woo_sales_agent_cart_hash', 10, 2);
+add_action('init', 'woo_sales_agent_sync_session', 20);
+
+function woo_sales_agent_sync_session() {
+    // Sync user meta to WC session on frontend
+    if (!is_admin() && is_user_logged_in()) {
+        $user_id = get_current_user_id();
+        $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
+        
+        if ($acting_as && function_exists('WC') && WC()->session) {
+            WC()->session->set('sales_agent_acting_as_customer', $acting_as);
+            WC()->session->set('sales_agent_original_user', $user_id);
+        }
+    }
+}
 
 function woo_sales_agent_cart_hash($hash, $cart) {
-    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    $user_id = get_current_user_id();
+    $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
     if ($acting_as) {
         $hash .= '_agent_' . $acting_as;
     }
@@ -730,12 +744,13 @@ function woo_assign_order_to_sales_agent($order_id) {
 add_action('wp_footer', 'woo_sales_agent_acting_notice');
 
 function woo_sales_agent_acting_notice() {
-    // Check if WooCommerce and sessions are available
-    if (!function_exists('WC') || !WC() || !WC()->session) {
+    if (!is_user_logged_in()) {
         return;
     }
     
-    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    $user_id = get_current_user_id();
+    $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
+    
     if ($acting_as) {
         $customer = get_userdata($acting_as);
         if (!$customer) {
