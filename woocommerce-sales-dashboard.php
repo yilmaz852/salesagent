@@ -56,7 +56,7 @@ function woo_create_sales_form() {
     $default_start_date = date('Y-m-01');
     $default_end_date = date('Y-m-d');
 
-    // Seçimlerin korunması için gönderim sonrası değerler alınır
+    // Preserve selections after form submission
     $selected_statuses = !empty($_POST['exclude_statuses']) ? $_POST['exclude_statuses'] : [];
 
     $output = '<form method="post">';
@@ -72,7 +72,7 @@ function woo_create_sales_form() {
         return $output;
     }
 
-    // Dropdown menü
+    // Dropdown menu for sales agents
     $selected_agent = !empty($_POST['sales_agent_id']) ? intval($_POST['sales_agent_id']) : '';
     $output .= '<select name="sales_agent_id" id="sales_agent_id">';
     $output .= '<option value="">All Sales Agents</option>';
@@ -87,12 +87,12 @@ function woo_create_sales_form() {
     $output .= '<label for="end_date">Select End Date:</label><br />';
     $output .= '<input type="date" id="end_date" name="end_date" value="' . esc_attr(isset($_POST['end_date']) ? $_POST['end_date'] : $default_end_date) . '"><br /><br />';
 
-    // Checkbox durumları
+    // Order status checkboxes
     $order_statuses = wc_get_order_statuses();
     $output .= '<label for="exclude_statuses">Exclude Order Statuses:</label><br />';
     $output .= '<div style="display: flex; flex-wrap: wrap; gap: 10px;">';
     foreach ($order_statuses as $status_key => $status_label) {
-        $checked = in_array($status_key, $selected_statuses) ? 'checked' : ''; // Seçim korunuyor
+        $checked = in_array($status_key, $selected_statuses) ? 'checked' : ''; // Preserve selection
         $output .= '<div><input type="checkbox" name="exclude_statuses[]" value="' . esc_attr($status_key) . '" ' . $checked . ' /> ' . esc_html($status_label) . '</div>';
     }
     $output .= '</div><br />';
@@ -156,7 +156,7 @@ function woo_generate_sales_report($sales_agent_id = null, $start_date = null, $
         return '<p>No orders found for the selected filters.</p>';
     }
 
-    // Toplam değişkenler
+    // Total variables
     $gross_total = 0;
     $refund_total = 0;
     $items_subtotal_sum = 0;
@@ -191,7 +191,7 @@ function woo_generate_sales_report($sales_agent_id = null, $start_date = null, $
         $commission_total += $commission;
     }
 
-    // Widget'lar
+    // Metric widgets
     $output = '<div style="display: flex; justify-content: space-between; margin-bottom: 30px;">';
 
     $widget_style = 'padding: 20px; border-radius: 8px; text-align: center; flex: 1; margin-right: 10px; color: white; font-size: 16px;';
@@ -201,7 +201,7 @@ function woo_generate_sales_report($sales_agent_id = null, $start_date = null, $
     $output .= '<div style="background-color: #E91E63; ' . $widget_style . '"><strong>Commission (3%)</strong><br />' . wc_price($commission_total) . '</div>';
     $output .= '</div>';
 
-    // Rapor tablosu
+    // Report table
     $output .= '<table class="widefat" style="margin-top: 20px;">';
     $output .= '<thead>
                     <tr>
