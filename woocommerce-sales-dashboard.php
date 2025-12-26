@@ -1159,92 +1159,115 @@ function woo_save_sales_agent_fields($user_id) {
     }
 }
 
-// 11. Override WooCommerce customer when sales agent is acting as customer
-add_filter('woocommerce_cart_hash', 'woo_sales_agent_cart_hash', 10, 2);
-add_action('init', 'woo_sales_agent_sync_session', 20);
-add_filter('woocommerce_customer_get_id', 'woo_sales_agent_override_wc_customer_id', 99);
+// 11. Complete user switching for sales agents to act as customers
+add_action('init', 'woo_sales_agent_handle_user_switching', 1);
 
-function woo_sales_agent_override_wc_customer_id($customer_id) {
-    // Only override on frontend for WooCommerce operations
-    if (!is_admin() && is_user_logged_in()) {
-        $user_id = wp_get_current_user()->ID;
-        
-        // Check if this is the sales agent (not already overridden)
-        if (in_array('sales_agent', wp_get_current_user()->roles)) {
-            $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
-            if ($acting_as) {
-                return intval($acting_as);
+function woo_sales_agent_handle_user_switching() {
+    // Only on frontend
+    if (is_admin()) {
+        return;
+    }
+    
+    // Check if we need to restore the original sales agent
+    if (isset($_GET['restore_agent']) && isset($_GET['_wpnonce'])) {
+        if (wp_verify_nonce($_GET['_wpnonce'], 'restore_agent')) {
+            $original_agent_id = get_user_meta(get_current_user_id(), '_original_sales_agent', true);
+            
+            if ($original_agent_id) {
+                // Clean up the customer meta
+                delete_user_meta(get_current_user_id(), '_original_sales_agent');
+                
+                // Log out current user (customer) and log in as agent
+                wp_set_current_user($original_agent_id);
+                wp_set_auth_cookie($original_agent_id);
+                
+                // Redirect to dashboard
+                wp_redirect(home_url('/sales-agent-dashboard/customers/'));
+                exit;
             }
         }
     }
-    return $customer_id;
-}
-
-function woo_sales_agent_sync_session() {
-    // Sync user meta to WC session on frontend
-    if (!is_admin() && is_user_logged_in()) {
-        $user_id = get_current_user_id();
-        $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
-        
-        if ($acting_as && function_exists('WC') && WC()->session) {
-            WC()->session->set('sales_agent_acting_as_customer', $acting_as);
-            WC()->session->set('sales_agent_original_user', $user_id);
-        }
-    }
-}
-
-function woo_sales_agent_cart_hash($hash, $cart) {
+    
+    // Check if a sales agent is logged in and has marked a customer to switch to
     if (is_user_logged_in()) {
-        $user_id = get_current_user_id();
-        $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
-        if ($acting_as) {
-            $hash .= '_agent_' . $acting_as;
+        $user = wp_get_current_user();
+        
+        // Only for sales agents
+        if (in_array('sales_agent', $user->roles)) {
+            $acting_as = get_user_meta($user->ID, '_acting_as_customer', true);
+            
+            if ($acting_as && !get_user_meta($acting_as, '_original_sales_agent', true)) {
+                // Store the agent ID in the customer's meta
+                update_user_meta($acting_as, '_original_sales_agent', $user->ID);
+                
+                // Clean up the flag from agent
+                delete_user_meta($user->ID, '_acting_as_customer');
+                
+                // Actually switch users - log out agent, log in as customer
+                wp_set_current_user($acting_as);
+                wp_set_auth_cookie($acting_as);
+                
+                // If shop_now flag is set, go to homepage, otherwise stay on current page
+                if (isset($_GET['shop_now'])) {
+                    wp_redirect(home_url('/'));
+                    exit;
+                }
+            }
+        }
+        
+        // If currently logged in as a customer who was switched by an agent
+        $original_agent = get_user_meta($user->ID, '_original_sales_agent', true);
+        if ($original_agent && !in_array('sales_agent', $user->roles)) {
+            // This is a customer being controlled by a sales agent
+            // WooCommerce will use this customer's ID automatically
         }
     }
-    return $hash;
 }
 
-// 12. Assign order to sales agent when placing order as customer
+// Add a banner when a customer is being controlled by a sales agent
+add_action('wp_footer', 'woo_sales_agent_show_control_banner', 999);
+
+function woo_sales_agent_show_control_banner() {
+    if (!is_user_logged_in() || is_admin()) {
+        return;
+    }
+    
+    $user = wp_get_current_user();
+    $original_agent = get_user_meta($user->ID, '_original_sales_agent', true);
+    
+    if ($original_agent && !in_array('sales_agent', $user->roles)) {
+        $agent_user = get_userdata($original_agent);
+        if ($agent_user) {
+            $restore_url = add_query_arg([
+                'restore_agent' => '1',
+                '_wpnonce' => wp_create_nonce('restore_agent')
+            ], home_url('/'));
+            
+            echo '<div style="position: fixed; top: 0; left: 0; right: 0; background: #ff9800; color: white; padding: 15px 20px; text-align: center; z-index: 999999; box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif;">';
+            echo '<strong>Sales Agent Mode:</strong> You are logged in as <strong>' . esc_html($user->display_name) . '</strong> by sales agent <strong>' . esc_html($agent_user->display_name) . '</strong>';
+            echo ' | <a href="' . esc_url($restore_url) . '" style="color: white; text-decoration: underline; font-weight: bold;">Return to Sales Agent Dashboard</a>';
+            echo '</div>';
+            echo '<style>body { margin-top: 60px !important; } #wpadminbar { top: 60px !important; }</style>';
+        }
+    }
+}
+
+// 12. Assign order to sales agent when customer (controlled by agent) places order
 add_action('woocommerce_checkout_order_processed', 'woo_assign_order_to_sales_agent', 10, 1);
 
 function woo_assign_order_to_sales_agent($order_id) {
-    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
-    $agent_id = WC()->session->get('sales_agent_original_user');
-    
-    if ($acting_as && $agent_id) {
-        // Assign the order to the sales agent
-        update_post_meta($order_id, 'wcb2bsa_sales_agent', $agent_id);
-        
-        // Also set the customer
-        $order = wc_get_order($order_id);
-        $order->set_customer_id($acting_as);
-        $order->save();
-    }
-}
-
-// 13. Show notice when sales agent is acting as customer (frontend)
-add_action('wp_footer', 'woo_sales_agent_acting_notice');
-
-function woo_sales_agent_acting_notice() {
     if (!is_user_logged_in()) {
         return;
     }
     
-    $user_id = get_current_user_id();
-    $acting_as = get_user_meta($user_id, '_acting_as_customer', true);
+    $customer_id = get_current_user_id();
+    $agent_id = get_user_meta($customer_id, '_original_sales_agent', true);
     
-    if ($acting_as) {
-        $customer = get_userdata($acting_as);
-        if (!$customer) {
-            return;
-        }
+    if ($agent_id) {
+        // This order is being placed by a customer who is controlled by a sales agent
+        // Assign the order to the sales agent for commission tracking
+        update_post_meta($order_id, 'wcb2bsa_sales_agent', $agent_id);
         
-        echo '<div style="position: fixed; top: 32px; left: 0; right: 0; background: #ff9800; color: white; padding: 10px; text-align: center; z-index: 999999; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">';
-        echo '<strong>Sales Agent Mode:</strong> You are currently shopping as ' . esc_html($customer->display_name) . ' (' . esc_html($customer->user_email) . ')';
-        echo ' | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '" style="color: white; text-decoration: underline;">Exit Customer View</a>';
-        echo '</div>';
-        
-        // Add margin to body to prevent content hiding
-        echo '<style>body { margin-top: 50px !important; }</style>';
+        // Customer ID is already correct (current user is the customer)
     }
 }
