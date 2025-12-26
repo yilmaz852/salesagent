@@ -1,16 +1,16 @@
 <?php
 /**
- * Plugin Name: WooCommerce Sales Dashboard
+ * Plugin Name: WooCommerce Sales Agent System
  * Plugin URI: https://github.com/yilmaz852/salesagent
- * Description: A comprehensive sales dashboard for WooCommerce that displays sales reports including subtotal calculations, refunds, net values, commissions, visualizations, and exclusions.
- * Version: 1.0.0
+ * Description: Complete sales agent management system with customer assignment, commission tracking, order placement on behalf of customers, and comprehensive dashboards.
+ * Version: 2.0.0
  * Author: yilmaz852
  * Author URI: https://github.com/yilmaz852
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Requires at least: 5.0
  * Requires PHP: 7.2
- * Text Domain: woo-sales-dashboard
+ * Text Domain: woo-sales-agent
  * Domain Path: /languages
  */
 
@@ -26,22 +26,7 @@ if (!in_array('woocommerce/woocommerce.php', apply_filters('active_plugins', get
 }
 
 function woo_sales_dashboard_woocommerce_missing_notice() {
-    echo '<div class="error"><p><strong>WooCommerce Sales Dashboard</strong> requires WooCommerce to be installed and active.</p></div>';
-}
-
-// Add menu to admin
-add_action('admin_menu', 'woo_sales_dashboard_menu');
-
-function woo_sales_dashboard_menu() {
-    add_menu_page(
-        'Sales Dashboard',
-        'Sales Dashboard',
-        'manage_woocommerce',
-        'sales-dashboard',
-        'woo_sales_dashboard_callback',
-        'dashicons-chart-bar',
-        33
-    );
+    echo '<div class="error"><p><strong>WooCommerce Sales Agent System</strong> requires WooCommerce to be installed and active.</p></div>';
 }
 
 function woo_sales_dashboard_callback() {
@@ -293,4 +278,474 @@ function woo_get_refund_item_totals($refund_id) {
     }
 
     return ['subtotal' => $subtotal];
+}
+
+// ============================================================================
+// SALES AGENT SYSTEM - Enhanced Features (v2.0)
+// ============================================================================
+
+// 1. Login redirect for sales agents
+add_action('admin_init', 'woo_sales_agent_login_redirect');
+
+function woo_sales_agent_login_redirect() {
+    $user = wp_get_current_user();
+    
+    // Only redirect sales agents, and only once per session
+    if (in_array('sales_agent', $user->roles) && !get_user_meta($user->ID, '_sales_agent_redirected', true)) {
+        update_user_meta($user->ID, '_sales_agent_redirected', true);
+        
+        // Clear redirect flag after 5 minutes
+        wp_schedule_single_event(time() + 300, 'woo_clear_redirect_flag', [$user->ID]);
+        
+        if (!isset($_GET['page']) || $_GET['page'] !== 'sales-agent-dashboard') {
+            wp_safe_redirect(admin_url('admin.php?page=sales-agent-dashboard'));
+            exit;
+        }
+    }
+}
+
+// Clear redirect flag
+add_action('woo_clear_redirect_flag', 'woo_clear_sales_agent_redirect_flag');
+
+function woo_clear_sales_agent_redirect_flag($user_id) {
+    delete_user_meta($user_id, '_sales_agent_redirected');
+}
+
+// 2. Add sales agent menu items
+add_action('admin_menu', 'woo_sales_agent_menu');
+
+function woo_sales_agent_menu() {
+    $user = wp_get_current_user();
+    
+    // Admin menu - full access
+    if (current_user_can('manage_woocommerce')) {
+        add_menu_page(
+            'Sales Dashboard',
+            'Sales Dashboard',
+            'manage_woocommerce',
+            'sales-dashboard',
+            'woo_sales_dashboard_callback',
+            'dashicons-chart-bar',
+            33
+        );
+    }
+    
+    // Sales agent menu - restricted access
+    if (in_array('sales_agent', $user->roles)) {
+        add_menu_page(
+            'My Dashboard',
+            'My Dashboard',
+            'read',
+            'sales-agent-dashboard',
+            'woo_sales_agent_dashboard_callback',
+            'dashicons-businessman',
+            26
+        );
+        
+        add_submenu_page(
+            'sales-agent-dashboard',
+            'My Earnings',
+            'My Earnings',
+            'read',
+            'sales-agent-earnings',
+            'woo_sales_agent_earnings_callback'
+        );
+        
+        add_submenu_page(
+            'sales-agent-dashboard',
+            'My Customers',
+            'My Customers',
+            'read',
+            'sales-agent-customers',
+            'woo_sales_agent_customers_callback'
+        );
+    }
+}
+
+// 3. Sales agent dashboard page
+function woo_sales_agent_dashboard_callback() {
+    $user = wp_get_current_user();
+    
+    echo '<div class="wrap">';
+    echo '<h1>Welcome, ' . esc_html($user->display_name) . '</h1>';
+    echo '<p>Your Sales Agent Dashboard</p>';
+    
+    // Quick stats
+    $customer_count = woo_get_agent_customer_count($user->ID);
+    $commission_rate = get_user_meta($user->ID, 'sales_agent_commission_rate', true) ?: 3;
+    
+    echo '<div style="display: flex; gap: 20px; margin: 20px 0;">';
+    echo '<div style="background: #2271b1; color: white; padding: 20px; border-radius: 8px; flex: 1;">';
+    echo '<h3 style="margin: 0; color: white;">My Customers</h3>';
+    echo '<p style="font-size: 32px; margin: 10px 0;">' . esc_html($customer_count) . '</p>';
+    echo '</div>';
+    
+    echo '<div style="background: #00a32a; color: white; padding: 20px; border-radius: 8px; flex: 1;">';
+    echo '<h3 style="margin: 0; color: white;">Commission Rate</h3>';
+    echo '<p style="font-size: 32px; margin: 10px 0;">' . esc_html($commission_rate) . '%</p>';
+    echo '</div>';
+    echo '</div>';
+    
+    // Quick actions
+    echo '<h2>Quick Actions</h2>';
+    echo '<div style="display: flex; gap: 10px; flex-wrap: wrap;">';
+    echo '<a href="' . admin_url('admin.php?page=sales-agent-customers') . '" class="button button-primary button-large">View My Customers</a>';
+    echo '<a href="' . admin_url('admin.php?page=sales-agent-earnings') . '" class="button button-secondary button-large">View My Earnings</a>';
+    echo '</div>';
+    
+    echo '</div>';
+}
+
+// 4. Sales agent earnings page
+function woo_sales_agent_earnings_callback() {
+    $user = wp_get_current_user();
+    
+    echo '<div class="wrap">';
+    echo '<h1>My Earnings</h1>';
+    echo '<p>View your commission earnings</p>';
+    
+    // Get commission rate for this agent
+    $commission_rate = floatval(get_user_meta($user->ID, 'sales_agent_commission_rate', true) ?: 3) / 100;
+    
+    // Create form with date range
+    $default_start_date = date('Y-m-01');
+    $default_end_date = date('Y-m-d');
+    
+    echo '<form method="post">';
+    echo wp_nonce_field('woo_agent_earnings_action', 'woo_agent_earnings_nonce', true, false);
+    echo '<label for="start_date">Start Date:</label> ';
+    echo '<input type="date" id="start_date" name="start_date" value="' . esc_attr(isset($_POST['start_date']) ? $_POST['start_date'] : $default_start_date) . '"> ';
+    echo '<label for="end_date">End Date:</label> ';
+    echo '<input type="date" id="end_date" name="end_date" value="' . esc_attr(isset($_POST['end_date']) ? $_POST['end_date'] : $default_end_date) . '"> ';
+    echo '<input type="submit" value="View Earnings" class="button button-primary">';
+    echo '</form><br />';
+    
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!isset($_POST['woo_agent_earnings_nonce']) || !wp_verify_nonce($_POST['woo_agent_earnings_nonce'], 'woo_agent_earnings_action')) {
+            echo '<div class="notice notice-error"><p>Security check failed.</p></div>';
+            echo '</div>';
+            return;
+        }
+        
+        $start_date = !empty($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : $default_start_date;
+        $end_date = !empty($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : $default_end_date;
+        
+        // Generate report for this agent only
+        echo woo_generate_agent_earnings_report($user->ID, $start_date, $end_date, $commission_rate);
+    }
+    
+    echo '</div>';
+}
+
+// 5. Generate earnings report for specific agent
+function woo_generate_agent_earnings_report($sales_agent_id, $start_date, $end_date, $commission_rate) {
+    $args = [
+        'post_type' => 'shop_order',
+        'posts_per_page' => -1,
+        'orderby' => 'date',
+        'order' => 'DESC',
+        'date_query' => [
+            [
+                'after' => $start_date,
+                'before' => $end_date,
+                'inclusive' => true,
+            ],
+        ],
+        'meta_query' => [
+            [
+                'key' => 'wcb2bsa_sales_agent',
+                'value' => $sales_agent_id,
+                'compare' => '=',
+            ],
+        ],
+    ];
+    
+    $orders = get_posts($args);
+    
+    if (empty($orders)) {
+        return '<p>No orders found for the selected period.</p>';
+    }
+    
+    $total_commission = 0;
+    $net_subtotal_sum = 0;
+    
+    foreach ($orders as $order_post) {
+        $order = wc_get_order($order_post->ID);
+        $refund_ids = woo_get_refund_ids($order->get_id());
+        
+        $items_subtotal = floatval($order->get_subtotal());
+        $refund_subtotal = 0;
+        
+        foreach ($refund_ids as $refund_id) {
+            $refund_data = woo_get_refund_item_totals($refund_id);
+            $refund_subtotal += abs(floatval($refund_data['subtotal']));
+        }
+        
+        $net_item_subtotal = $items_subtotal - $refund_subtotal;
+        if ($net_item_subtotal < 0) {
+            $net_item_subtotal = 0;
+        }
+        
+        $commission = $net_item_subtotal * $commission_rate;
+        
+        $total_commission += $commission;
+        $net_subtotal_sum += $net_item_subtotal;
+    }
+    
+    // Display summary
+    $output = '<div style="display: flex; gap: 20px; margin: 20px 0;">';
+    $output .= '<div style="background: #00BCD4; color: white; padding: 20px; border-radius: 8px; flex: 1; text-align: center;">';
+    $output .= '<strong>Total Sales (Net)</strong><br />' . wc_price($net_subtotal_sum) . '</div>';
+    $output .= '<div style="background: #E91E63; color: white; padding: 20px; border-radius: 8px; flex: 1; text-align: center;">';
+    $output .= '<strong>Total Commission (' . ($commission_rate * 100) . '%)</strong><br />' . wc_price($total_commission) . '</div>';
+    $output .= '</div>';
+    
+    // Order table
+    $output .= '<table class="widefat">';
+    $output .= '<thead><tr><th>Order ID</th><th>Date</th><th>Status</th><th>Net Subtotal</th><th>Commission</th></tr></thead><tbody>';
+    
+    foreach ($orders as $order_post) {
+        $order = wc_get_order($order_post->ID);
+        $refund_ids = woo_get_refund_ids($order->get_id());
+        
+        $items_subtotal = floatval($order->get_subtotal());
+        $refund_subtotal = 0;
+        
+        foreach ($refund_ids as $refund_id) {
+            $refund_data = woo_get_refund_item_totals($refund_id);
+            $refund_subtotal += abs(floatval($refund_data['subtotal']));
+        }
+        
+        $net_item_subtotal = $items_subtotal - $refund_subtotal;
+        if ($net_item_subtotal < 0) {
+            $net_item_subtotal = 0;
+        }
+        
+        $commission = $net_item_subtotal * $commission_rate;
+        
+        $output .= '<tr>';
+        $output .= '<td>#' . esc_html($order->get_id()) . '</td>';
+        $output .= '<td>' . esc_html($order->get_date_created()->date('Y-m-d')) . '</td>';
+        $output .= '<td>' . esc_html(wc_get_order_status_name($order->get_status())) . '</td>';
+        $output .= '<td>' . wc_price($net_item_subtotal) . '</td>';
+        $output .= '<td>' . wc_price($commission) . '</td>';
+        $output .= '</tr>';
+    }
+    
+    $output .= '</tbody></table>';
+    
+    return $output;
+}
+
+// 6. Sales agent customers page
+function woo_sales_agent_customers_callback() {
+    $user = wp_get_current_user();
+    
+    echo '<div class="wrap">';
+    echo '<h1>My Customers</h1>';
+    echo '<p>Manage customers assigned to you</p>';
+    
+    $customers = woo_get_agent_customers($user->ID);
+    
+    if (empty($customers)) {
+        echo '<p>No customers assigned to you yet.</p>';
+        echo '</div>';
+        return;
+    }
+    
+    // Handle customer switch
+    if (isset($_GET['switch_to_customer']) && isset($_GET['_wpnonce'])) {
+        if (wp_verify_nonce($_GET['_wpnonce'], 'switch_customer_' . intval($_GET['switch_to_customer']))) {
+            $customer_id = intval($_GET['switch_to_customer']);
+            
+            // Verify this customer is assigned to this agent
+            $customer_agent = get_user_meta($customer_id, 'assigned_sales_agent', true);
+            if ($customer_agent == $user->ID) {
+                // Store the switch in session
+                WC()->session->set('sales_agent_acting_as_customer', $customer_id);
+                WC()->session->set('sales_agent_original_user', $user->ID);
+                
+                echo '<div class="notice notice-success"><p>You are now acting as ' . esc_html(get_userdata($customer_id)->display_name) . '. <a href="' . esc_url(wc_get_page_permalink('shop')) . '">Go to Shop</a> | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></p></div>';
+            }
+        }
+    }
+    
+    // Handle stop switch
+    if (isset($_GET['stop_switch']) && isset($_GET['_wpnonce'])) {
+        if (wp_verify_nonce($_GET['_wpnonce'], 'stop_switch')) {
+            WC()->session->set('sales_agent_acting_as_customer', null);
+            WC()->session->set('sales_agent_original_user', null);
+            echo '<div class="notice notice-info"><p>You are no longer acting as a customer.</p></div>';
+        }
+    }
+    
+    // Check if currently acting as customer
+    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    if ($acting_as) {
+        $customer_user = get_userdata($acting_as);
+        echo '<div class="notice notice-warning"><p><strong>Currently Acting As:</strong> ' . esc_html($customer_user->display_name) . ' (' . esc_html($customer_user->user_email) . ') | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></p></div>';
+    }
+    
+    // Display customer table
+    echo '<table class="widefat">';
+    echo '<thead><tr><th>Customer</th><th>Email</th><th>Total Orders</th><th>Total Spent</th><th>Actions</th></tr></thead><tbody>';
+    
+    foreach ($customers as $customer) {
+        $customer_obj = new WC_Customer($customer->ID);
+        $order_count = wc_get_customer_order_count($customer->ID);
+        $total_spent = wc_get_customer_total_spent($customer->ID);
+        
+        echo '<tr>';
+        echo '<td>' . esc_html($customer->display_name) . '</td>';
+        echo '<td>' . esc_html($customer->user_email) . '</td>';
+        echo '<td>' . esc_html($order_count) . '</td>';
+        echo '<td>' . wc_price($total_spent) . '</td>';
+        echo '<td>';
+        $switch_url = admin_url('admin.php?page=sales-agent-customers&switch_to_customer=' . $customer->ID . '&_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
+        echo '<a href="' . esc_url($switch_url) . '" class="button button-small">Act as Customer</a> ';
+        echo '<a href="' . esc_url(wc_get_page_permalink('shop')) . '" class="button button-small button-primary">Shop Now</a>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    
+    echo '</tbody></table>';
+    echo '</div>';
+}
+
+// 7. Get customers assigned to agent
+function woo_get_agent_customers($agent_id) {
+    $args = [
+        'meta_key' => 'assigned_sales_agent',
+        'meta_value' => $agent_id,
+        'fields' => 'all',
+    ];
+    
+    return get_users($args);
+}
+
+// 8. Get customer count for agent
+function woo_get_agent_customer_count($agent_id) {
+    $customers = woo_get_agent_customers($agent_id);
+    return count($customers);
+}
+
+// 9. Add commission rate field to user profile
+add_action('show_user_profile', 'woo_add_sales_agent_fields');
+add_action('edit_user_profile', 'woo_add_sales_agent_fields');
+
+function woo_add_sales_agent_fields($user) {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    
+    $is_sales_agent = in_array('sales_agent', $user->roles);
+    $commission_rate = get_user_meta($user->ID, 'sales_agent_commission_rate', true) ?: 3;
+    $all_users = get_users(['role__not_in' => ['administrator', 'sales_agent']]);
+    $assigned_agent = get_user_meta($user->ID, 'assigned_sales_agent', true);
+    
+    echo '<h3>Sales Agent Settings</h3>';
+    echo '<table class="form-table">';
+    
+    if ($is_sales_agent) {
+        echo '<tr>';
+        echo '<th><label for="sales_agent_commission_rate">Commission Rate (%)</label></th>';
+        echo '<td>';
+        echo '<input type="number" step="0.01" name="sales_agent_commission_rate" id="sales_agent_commission_rate" value="' . esc_attr($commission_rate) . '" class="regular-text" />';
+        echo '<p class="description">Commission percentage for this sales agent (e.g., 3 for 3%)</p>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    
+    if (!$is_sales_agent && !in_array('administrator', $user->roles)) {
+        echo '<tr>';
+        echo '<th><label for="assigned_sales_agent">Assigned Sales Agent</label></th>';
+        echo '<td>';
+        
+        $sales_agents = woo_get_sales_agents();
+        echo '<select name="assigned_sales_agent" id="assigned_sales_agent">';
+        echo '<option value="">None</option>';
+        foreach ($sales_agents as $agent) {
+            $selected = ($assigned_agent == $agent->ID) ? 'selected' : '';
+            echo '<option value="' . esc_attr($agent->ID) . '" ' . $selected . '>' . esc_html($agent->display_name) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="description">Assign this customer to a sales agent</p>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    
+    echo '</table>';
+}
+
+// 10. Save user meta fields
+add_action('personal_options_update', 'woo_save_sales_agent_fields');
+add_action('edit_user_profile_update', 'woo_save_sales_agent_fields');
+
+function woo_save_sales_agent_fields($user_id) {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    
+    if (isset($_POST['sales_agent_commission_rate'])) {
+        update_user_meta($user_id, 'sales_agent_commission_rate', floatval($_POST['sales_agent_commission_rate']));
+    }
+    
+    if (isset($_POST['assigned_sales_agent'])) {
+        $agent_id = intval($_POST['assigned_sales_agent']);
+        if ($agent_id > 0) {
+            update_user_meta($user_id, 'assigned_sales_agent', $agent_id);
+        } else {
+            delete_user_meta($user_id, 'assigned_sales_agent');
+        }
+    }
+}
+
+// 11. Override WooCommerce customer when sales agent is acting as customer
+add_filter('woocommerce_cart_hash', 'woo_sales_agent_cart_hash', 10, 2);
+
+function woo_sales_agent_cart_hash($hash, $cart) {
+    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    if ($acting_as) {
+        $hash .= '_agent_' . $acting_as;
+    }
+    return $hash;
+}
+
+// 12. Assign order to sales agent when placing order as customer
+add_action('woocommerce_checkout_order_processed', 'woo_assign_order_to_sales_agent', 10, 1);
+
+function woo_assign_order_to_sales_agent($order_id) {
+    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    $agent_id = WC()->session->get('sales_agent_original_user');
+    
+    if ($acting_as && $agent_id) {
+        // Assign the order to the sales agent
+        update_post_meta($order_id, 'wcb2bsa_sales_agent', $agent_id);
+        
+        // Also set the customer
+        $order = wc_get_order($order_id);
+        $order->set_customer_id($acting_as);
+        $order->save();
+    }
+}
+
+// 13. Show notice when sales agent is acting as customer (frontend)
+add_action('wp_footer', 'woo_sales_agent_acting_notice');
+
+function woo_sales_agent_acting_notice() {
+    if (!WC()->session) {
+        return;
+    }
+    
+    $acting_as = WC()->session->get('sales_agent_acting_as_customer');
+    if ($acting_as) {
+        $customer = get_userdata($acting_as);
+        echo '<div style="position: fixed; top: 32px; left: 0; right: 0; background: #ff9800; color: white; padding: 10px; text-align: center; z-index: 999999; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">';
+        echo '<strong>Sales Agent Mode:</strong> You are currently shopping as ' . esc_html($customer->display_name) . ' (' . esc_html($customer->user_email) . ')';
+        echo ' | <a href="' . esc_url(admin_url('admin.php?page=sales-agent-customers&stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '" style="color: white; text-decoration: underline;">Exit Customer View</a>';
+        echo '</div>';
+        
+        // Add margin to body to prevent content hiding
+        echo '<style>body { margin-top: 50px !important; }</style>';
+    }
 }
