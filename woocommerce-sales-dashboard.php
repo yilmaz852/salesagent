@@ -1165,13 +1165,31 @@ function woo_sales_agent_handle_user_switching() {
             wp_die('This customer is already being used by another agent.');
         }
         
+        // Get the customer user object
+        $customer_user = get_userdata($switch_customer_id);
+        if (!$customer_user) {
+            wp_die('Customer not found.');
+        }
+        
         // Store the agent ID in the customer's meta
         update_user_meta($switch_customer_id, '_original_sales_agent', $user->ID);
         
-        // Actually switch users - log out agent, log in as customer
+        // Actually switch users - Complete logout and login process
+        // 1. Clear all authentication for current agent
         wp_clear_auth_cookie();
+        wp_logout();
+        
+        // 2. Set the customer as current user
         wp_set_current_user($switch_customer_id);
-        wp_set_auth_cookie($switch_customer_id, true);
+        
+        // 3. Set authentication cookies for customer (remember = true for persistent login)
+        wp_set_auth_cookie($switch_customer_id, true, is_ssl());
+        
+        // 4. Trigger WordPress login action to ensure all hooks fire
+        do_action('wp_login', $customer_user->user_login, $customer_user);
+        
+        // 5. Update user login timestamp
+        update_user_meta($switch_customer_id, 'woo_last_login', time());
         
         // Redirect to My Account page
         $redirect_url = wc_get_page_permalink('myaccount');
@@ -1190,13 +1208,24 @@ function woo_sales_agent_handle_user_switching() {
             $original_agent_id = get_user_meta($user_id, '_original_sales_agent', true);
             
             if ($original_agent_id) {
+                // Get the agent user object
+                $agent_user = get_userdata($original_agent_id);
+                if (!$agent_user) {
+                    wp_die('Sales agent not found.');
+                }
+                
                 // Clean up the customer meta
                 delete_user_meta($user_id, '_original_sales_agent');
                 
-                // Log out current user (customer) and log in as agent
+                // Complete logout and login process
                 wp_clear_auth_cookie();
+                wp_logout();
+                
                 wp_set_current_user($original_agent_id);
-                wp_set_auth_cookie($original_agent_id, true);
+                wp_set_auth_cookie($original_agent_id, true, is_ssl());
+                
+                // Trigger login action
+                do_action('wp_login', $agent_user->user_login, $agent_user);
                 
                 // Redirect to dashboard
                 wp_safe_redirect(home_url('/sales-agent-dashboard/customers/'));
