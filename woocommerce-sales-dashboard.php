@@ -24,6 +24,7 @@ register_activation_hook(__FILE__, 'woo_sales_agent_activate');
 
 function woo_sales_agent_activate() {
     woo_sales_agent_add_rewrite_rules();
+    woo_sales_agent_add_switch_endpoint();
     flush_rewrite_rules();
 }
 
@@ -633,42 +634,6 @@ function woo_render_frontend_dashboard_home($user) {
 function woo_render_frontend_dashboard_customers($user) {
     $customers = woo_get_agent_customers($user->ID);
     
-    // Handle customer switch
-    if (isset($_GET['switch_to_customer']) && isset($_GET['_wpnonce'])) {
-        if (wp_verify_nonce($_GET['_wpnonce'], 'switch_customer_' . intval($_GET['switch_to_customer']))) {
-            $customer_id = intval($_GET['switch_to_customer']);
-            $customer_agent = get_user_meta($customer_id, 'assigned_sales_agent', true);
-            if ($customer_agent == $user->ID) {
-                update_user_meta($user->ID, '_acting_as_customer', $customer_id);
-                
-                // If shop_now parameter is set, redirect to shop
-                if (isset($_GET['shop_now'])) {
-                    wp_redirect(wc_get_page_permalink('shop'));
-                    exit;
-                }
-                
-                echo '<div class="notice notice-success">You are now acting as ' . esc_html(get_userdata($customer_id)->display_name) . '. <a href="' . esc_url(wc_get_page_permalink('shop')) . '">Go to Shop</a></div>';
-            }
-        }
-    }
-    
-    // Handle stop switch
-    if (isset($_GET['stop_switch']) && isset($_GET['_wpnonce'])) {
-        if (wp_verify_nonce($_GET['_wpnonce'], 'stop_switch')) {
-            delete_user_meta($user->ID, '_acting_as_customer');
-            echo '<div class="notice notice-info">You are no longer acting as a customer.</div>';
-        }
-    }
-    
-    // Check if currently acting as customer
-    $acting_as = get_user_meta($user->ID, '_acting_as_customer', true);
-    if ($acting_as) {
-        $customer_user = get_userdata($acting_as);
-        if ($customer_user) {
-            echo '<div class="notice notice-warning">Currently Acting As: ' . esc_html($customer_user->display_name) . ' (' . esc_html($customer_user->user_email) . ') | <a href="' . esc_url(home_url('/sales-agent-dashboard/customers/?stop_switch=1&_wpnonce=' . wp_create_nonce('stop_switch'))) . '">Stop Acting as Customer</a></div>';
-        }
-    }
-    
     if (empty($customers)) {
         echo '<div class="content-card">';
         echo '<p>No customers assigned to you yet.</p>';
@@ -691,10 +656,9 @@ function woo_render_frontend_dashboard_customers($user) {
         echo '<td>' . esc_html($order_count) . '</td>';
         echo '<td>' . wc_price($total_spent) . '</td>';
         echo '<td>';
-        $switch_url = home_url('/sales-agent-dashboard/customers/?switch_to_customer=' . $customer->ID . '&_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
-        $shop_url = home_url('/sales-agent-dashboard/customers/?switch_to_customer=' . $customer->ID . '&shop_now=1&_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
-        echo '<a href="' . esc_url($switch_url) . '" class="button button-small">Act as Customer</a> ';
-        echo '<a href="' . esc_url($shop_url) . '" class="button button-small">Shop Now</a>';
+        // Use dedicated switch endpoint
+        $shop_url = home_url('/switch-to-customer/' . $customer->ID . '/?_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
+        echo '<a href="' . esc_url($shop_url) . '" class="button button-small">Shop Now (Login as Customer)</a>';
         echo '</td>';
         echo '</tr>';
     }
@@ -1161,65 +1125,83 @@ function woo_save_sales_agent_fields($user_id) {
 
 // 11. Complete user switching for sales agents to act as customers
 add_action('init', 'woo_sales_agent_handle_user_switching', 1);
+add_action('init', 'woo_sales_agent_add_switch_endpoint');
+
+function woo_sales_agent_add_switch_endpoint() {
+    add_rewrite_rule('^switch-to-customer/([0-9]+)/?', 'index.php?switch_customer_id=$1', 'top');
+}
+
+add_filter('query_vars', 'woo_sales_agent_switch_query_vars');
+
+function woo_sales_agent_switch_query_vars($vars) {
+    $vars[] = 'switch_customer_id';
+    return $vars;
+}
 
 function woo_sales_agent_handle_user_switching() {
-    // Only on frontend
-    if (is_admin()) {
-        return;
+    // Handle dedicated switch endpoint
+    $switch_customer_id = get_query_var('switch_customer_id');
+    if ($switch_customer_id && is_user_logged_in()) {
+        $user = wp_get_current_user();
+        
+        // Verify nonce
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'switch_customer_' . $switch_customer_id)) {
+            wp_die('Security check failed');
+        }
+        
+        // Verify sales agent role
+        if (!in_array('sales_agent', $user->roles)) {
+            wp_die('Access denied. Only sales agents can switch.');
+        }
+        
+        // Verify customer is assigned to this agent
+        $customer_agent = get_user_meta($switch_customer_id, 'assigned_sales_agent', true);
+        if ($customer_agent != $user->ID) {
+            wp_die('This customer is not assigned to you.');
+        }
+        
+        // Check if already switched
+        if (get_user_meta($switch_customer_id, '_original_sales_agent', true)) {
+            wp_die('This customer is already being used by another agent.');
+        }
+        
+        // Store the agent ID in the customer's meta
+        update_user_meta($switch_customer_id, '_original_sales_agent', $user->ID);
+        
+        // Actually switch users - log out agent, log in as customer
+        wp_clear_auth_cookie();
+        wp_set_current_user($switch_customer_id);
+        wp_set_auth_cookie($switch_customer_id, true);
+        
+        // Redirect to My Account page
+        $redirect_url = wc_get_page_permalink('myaccount');
+        if (!$redirect_url) {
+            $redirect_url = home_url('/my-account/');
+        }
+        
+        wp_safe_redirect($redirect_url);
+        exit;
     }
     
     // Check if we need to restore the original sales agent
     if (isset($_GET['restore_agent']) && isset($_GET['_wpnonce'])) {
         if (wp_verify_nonce($_GET['_wpnonce'], 'restore_agent')) {
-            $original_agent_id = get_user_meta(get_current_user_id(), '_original_sales_agent', true);
+            $user_id = get_current_user_id();
+            $original_agent_id = get_user_meta($user_id, '_original_sales_agent', true);
             
             if ($original_agent_id) {
                 // Clean up the customer meta
-                delete_user_meta(get_current_user_id(), '_original_sales_agent');
+                delete_user_meta($user_id, '_original_sales_agent');
                 
                 // Log out current user (customer) and log in as agent
+                wp_clear_auth_cookie();
                 wp_set_current_user($original_agent_id);
-                wp_set_auth_cookie($original_agent_id);
+                wp_set_auth_cookie($original_agent_id, true);
                 
                 // Redirect to dashboard
-                wp_redirect(home_url('/sales-agent-dashboard/customers/'));
+                wp_safe_redirect(home_url('/sales-agent-dashboard/customers/'));
                 exit;
             }
-        }
-    }
-    
-    // Check if a sales agent is logged in and has marked a customer to switch to
-    if (is_user_logged_in()) {
-        $user = wp_get_current_user();
-        
-        // Only for sales agents
-        if (in_array('sales_agent', $user->roles)) {
-            $acting_as = get_user_meta($user->ID, '_acting_as_customer', true);
-            
-            if ($acting_as && !get_user_meta($acting_as, '_original_sales_agent', true)) {
-                // Store the agent ID in the customer's meta
-                update_user_meta($acting_as, '_original_sales_agent', $user->ID);
-                
-                // Clean up the flag from agent
-                delete_user_meta($user->ID, '_acting_as_customer');
-                
-                // Actually switch users - log out agent, log in as customer
-                wp_set_current_user($acting_as);
-                wp_set_auth_cookie($acting_as);
-                
-                // If shop_now flag is set, go to homepage, otherwise stay on current page
-                if (isset($_GET['shop_now'])) {
-                    wp_redirect(home_url('/'));
-                    exit;
-                }
-            }
-        }
-        
-        // If currently logged in as a customer who was switched by an agent
-        $original_agent = get_user_meta($user->ID, '_original_sales_agent', true);
-        if ($original_agent && !in_array('sales_agent', $user->roles)) {
-            // This is a customer being controlled by a sales agent
-            // WooCommerce will use this customer's ID automatically
         }
     }
 }
