@@ -1174,21 +1174,24 @@ function woo_sales_agent_handle_user_switching() {
         // Store the agent ID in the customer's meta
         update_user_meta($switch_customer_id, '_original_sales_agent', $user->ID);
         
-        // Actually switch users - Complete logout and login process
-        // 1. Clear all authentication for current agent
+        // Actually switch users - Proper authentication flow
+        // 1. Clear current authentication cookies
         wp_clear_auth_cookie();
-        wp_logout();
         
         // 2. Set the customer as current user
         wp_set_current_user($switch_customer_id);
         
-        // 3. Set authentication cookies for customer (remember = true for persistent login)
-        wp_set_auth_cookie($switch_customer_id, true, is_ssl());
+        // 3. Create a new session token for the customer
+        $sessions = WP_Session_Tokens::get_instance($switch_customer_id);
+        $token = $sessions->create(time() + (14 * DAY_IN_SECONDS));
         
-        // 4. Trigger WordPress login action to ensure all hooks fire
+        // 4. Set authentication cookies with the new token
+        wp_set_auth_cookie($switch_customer_id, true, is_ssl(), $token);
+        
+        // 5. Trigger WordPress login action to ensure all hooks fire
         do_action('wp_login', $customer_user->user_login, $customer_user);
         
-        // 5. Update user login timestamp
+        // 6. Update user login timestamp
         update_user_meta($switch_customer_id, 'woo_last_login', time());
         
         // Redirect to My Account page
@@ -1217,12 +1220,16 @@ function woo_sales_agent_handle_user_switching() {
                 // Clean up the customer meta
                 delete_user_meta($user_id, '_original_sales_agent');
                 
-                // Complete logout and login process
+                // Complete authentication switch back to agent
                 wp_clear_auth_cookie();
-                wp_logout();
                 
                 wp_set_current_user($original_agent_id);
-                wp_set_auth_cookie($original_agent_id, true, is_ssl());
+                
+                // Create a new session token for the agent
+                $sessions = WP_Session_Tokens::get_instance($original_agent_id);
+                $token = $sessions->create(time() + (14 * DAY_IN_SECONDS));
+                
+                wp_set_auth_cookie($original_agent_id, true, is_ssl(), $token);
                 
                 // Trigger login action
                 do_action('wp_login', $agent_user->user_login, $agent_user);
