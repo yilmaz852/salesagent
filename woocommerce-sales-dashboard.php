@@ -19,12 +19,11 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-// Activation hook to flush rewrite rules
+// Activation hook - no longer needs rewrite rules
 register_activation_hook(__FILE__, 'woo_sales_agent_activate');
 
 function woo_sales_agent_activate() {
     woo_sales_agent_add_rewrite_rules();
-    woo_sales_agent_add_switch_endpoint();
     flush_rewrite_rules();
 }
 
@@ -656,9 +655,9 @@ function woo_render_frontend_dashboard_customers($user) {
         echo '<td>' . esc_html($order_count) . '</td>';
         echo '<td>' . wc_price($total_spent) . '</td>';
         echo '<td>';
-        // Use dedicated switch endpoint
-        $shop_url = home_url('/switch-to-customer/' . $customer->ID . '/?_wpnonce=' . wp_create_nonce('switch_customer_' . $customer->ID));
-        echo '<a href="' . esc_url($shop_url) . '" class="button button-small">Shop Now (Login as Customer)</a>';
+        // Use GET parameter with nonce for switching
+        $shop_url = wp_nonce_url(home_url('?switch_customer=' . $customer->ID), 'switch_customer');
+        echo '<a href="' . esc_url($shop_url) . '" class="button button-small">Shop Now</a>';
         echo '</td>';
         echo '</tr>';
     }
@@ -1123,126 +1122,62 @@ function woo_save_sales_agent_fields($user_id) {
     }
 }
 
-// 11. Complete user switching for sales agents to act as customers
+// 11. Simple cookie-based user switching for sales agents to act as customers
 add_action('init', 'woo_sales_agent_handle_user_switching', 1);
-add_action('init', 'woo_sales_agent_add_switch_endpoint');
-
-function woo_sales_agent_add_switch_endpoint() {
-    add_rewrite_rule('^switch-to-customer/([0-9]+)/?', 'index.php?switch_customer_id=$1', 'top');
-}
-
-add_filter('query_vars', 'woo_sales_agent_switch_query_vars');
-
-function woo_sales_agent_switch_query_vars($vars) {
-    $vars[] = 'switch_customer_id';
-    return $vars;
-}
 
 function woo_sales_agent_handle_user_switching() {
-    // Handle dedicated switch endpoint
-    $switch_customer_id = get_query_var('switch_customer_id');
-    if ($switch_customer_id && is_user_logged_in()) {
-        $user = wp_get_current_user();
+    // Handle switch to customer
+    if (isset($_GET['switch_customer'])) {
+        check_admin_referer('switch_customer');
         
-        // Verify nonce
-        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'switch_customer_' . $switch_customer_id)) {
-            wp_die('Security check failed');
+        $customer_id = intval($_GET['switch_customer']);
+        $agent_id = get_current_user_id();
+        $assigned = get_user_meta($customer_id, 'assigned_sales_agent', true);
+        
+        // Verify customer is assigned to this agent or user is admin
+        if ($assigned != $agent_id && !current_user_can('administrator')) {
+            wp_die('Unauthorized');
         }
         
-        // Verify sales agent role
-        if (!in_array('sales_agent', $user->roles)) {
-            wp_die('Access denied. Only sales agents can switch.');
-        }
+        // Store agent ID in cookie for switching back
+        setcookie('switch_back_agent', $agent_id, time() + 3600, COOKIEPATH, COOKIE_DOMAIN);
         
-        // Verify customer is assigned to this agent
-        $customer_agent = get_user_meta($switch_customer_id, 'assigned_sales_agent', true);
-        if ($customer_agent != $user->ID) {
-            wp_die('This customer is not assigned to you.');
-        }
-        
-        // Check if already switched
-        if (get_user_meta($switch_customer_id, '_original_sales_agent', true)) {
-            wp_die('This customer is already being used by another agent.');
-        }
-        
-        // Get the customer user object
-        $customer_user = get_userdata($switch_customer_id);
-        if (!$customer_user) {
-            wp_die('Customer not found.');
-        }
-        
-        // Store the agent ID in the customer's meta
-        update_user_meta($switch_customer_id, '_original_sales_agent', $user->ID);
-        
-        // Actually switch users - Proper authentication flow
-        // 1. Clear current authentication cookies
+        // Simple authentication switch
         wp_clear_auth_cookie();
+        wp_set_current_user($customer_id);
+        wp_set_auth_cookie($customer_id, true);
         
-        // 2. Set the customer as current user
-        wp_set_current_user($switch_customer_id);
-        
-        // 3. Create a new session token for the customer
-        $sessions = WP_Session_Tokens::get_instance($switch_customer_id);
-        $token = $sessions->create(time() + (14 * DAY_IN_SECONDS));
-        
-        // 4. Set authentication cookies with the new token
-        wp_set_auth_cookie($switch_customer_id, true, is_ssl(), $token);
-        
-        // 5. Trigger WordPress login action to ensure all hooks fire
-        do_action('wp_login', $customer_user->user_login, $customer_user);
-        
-        // 6. Update user login timestamp
-        update_user_meta($switch_customer_id, 'woo_last_login', time());
-        
-        // Redirect to My Account page
-        $redirect_url = wc_get_page_permalink('myaccount');
-        if (!$redirect_url) {
-            $redirect_url = home_url('/my-account/');
-        }
-        
-        wp_safe_redirect($redirect_url);
+        // Redirect to homepage
+        wp_redirect(home_url());
         exit;
     }
     
-    // Check if we need to restore the original sales agent
-    if (isset($_GET['restore_agent']) && isset($_GET['_wpnonce'])) {
-        if (wp_verify_nonce($_GET['_wpnonce'], 'restore_agent')) {
-            $user_id = get_current_user_id();
-            $original_agent_id = get_user_meta($user_id, '_original_sales_agent', true);
-            
-            if ($original_agent_id) {
-                // Get the agent user object
-                $agent_user = get_userdata($original_agent_id);
-                if (!$agent_user) {
-                    wp_die('Sales agent not found.');
-                }
-                
-                // Clean up the customer meta
-                delete_user_meta($user_id, '_original_sales_agent');
-                
-                // Complete authentication switch back to agent
-                wp_clear_auth_cookie();
-                
-                wp_set_current_user($original_agent_id);
-                
-                // Create a new session token for the agent
-                $sessions = WP_Session_Tokens::get_instance($original_agent_id);
-                $token = $sessions->create(time() + (14 * DAY_IN_SECONDS));
-                
-                wp_set_auth_cookie($original_agent_id, true, is_ssl(), $token);
-                
-                // Trigger login action
-                do_action('wp_login', $agent_user->user_login, $agent_user);
-                
-                // Redirect to dashboard
-                wp_safe_redirect(home_url('/sales-agent-dashboard/customers/'));
-                exit;
-            }
+    // Handle switch back to agent
+    if (isset($_GET['switch_back'])) {
+        check_admin_referer('switch_back');
+        
+        // Get agent ID from cookie
+        $agent_id = isset($_COOKIE['switch_back_agent']) ? intval($_COOKIE['switch_back_agent']) : 0;
+        
+        if (!$agent_id) {
+            wp_die('Invalid switch back request.');
         }
+        
+        // Delete the cookie
+        setcookie('switch_back_agent', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN);
+        
+        // Simple authentication switch
+        wp_clear_auth_cookie();
+        wp_set_current_user($agent_id);
+        wp_set_auth_cookie($agent_id, true);
+        
+        // Redirect back to sales dashboard
+        wp_redirect(home_url('/sales-agent-dashboard/'));
+        exit;
     }
 }
 
-// Add a banner when a customer is being controlled by a sales agent
+// Add a floating "Back to Sales Panel" button when agent is acting as customer
 add_action('wp_footer', 'woo_sales_agent_show_control_banner', 999);
 
 function woo_sales_agent_show_control_banner() {
@@ -1250,23 +1185,19 @@ function woo_sales_agent_show_control_banner() {
         return;
     }
     
-    $user = wp_get_current_user();
-    $original_agent = get_user_meta($user->ID, '_original_sales_agent', true);
+    // Check if we have a switch_back_agent cookie
+    if (!isset($_COOKIE['switch_back_agent'])) {
+        return;
+    }
     
-    if ($original_agent && !in_array('sales_agent', $user->roles)) {
-        $agent_user = get_userdata($original_agent);
-        if ($agent_user) {
-            $restore_url = add_query_arg([
-                'restore_agent' => '1',
-                '_wpnonce' => wp_create_nonce('restore_agent')
-            ], home_url('/'));
-            
-            echo '<div style="position: fixed; top: 0; left: 0; right: 0; background: #ff9800; color: white; padding: 15px 20px; text-align: center; z-index: 999999; box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif;">';
-            echo '<strong>Sales Agent Mode:</strong> You are logged in as <strong>' . esc_html($user->display_name) . '</strong> by sales agent <strong>' . esc_html($agent_user->display_name) . '</strong>';
-            echo ' | <a href="' . esc_url($restore_url) . '" style="color: white; text-decoration: underline; font-weight: bold;">Return to Sales Agent Dashboard</a>';
-            echo '</div>';
-            echo '<style>body { margin-top: 60px !important; } #wpadminbar { top: 60px !important; }</style>';
-        }
+    $agent_id = intval($_COOKIE['switch_back_agent']);
+    $agent_user = get_userdata($agent_id);
+    
+    if ($agent_user) {
+        $switch_back_url = wp_nonce_url(home_url('?switch_back=1'), 'switch_back');
+        
+        echo '<a href="' . esc_url($switch_back_url) . '" style="position: fixed; bottom: 20px; left: 20px; background: #ff9800; color: white; padding: 15px 25px; border-radius: 50px; text-decoration: none; font-weight: bold; z-index: 999999; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; font-size: 16px; transition: all 0.3s ease; display: inline-block;">← Back to Sales Panel</a>';
+        echo '<style>a[href*="switch_back"]:hover { background: #f57c00; transform: scale(1.05); }</style>';
     }
 }
 
@@ -1278,8 +1209,12 @@ function woo_assign_order_to_sales_agent($order_id) {
         return;
     }
     
-    $customer_id = get_current_user_id();
-    $agent_id = get_user_meta($customer_id, '_original_sales_agent', true);
+    // Check if there's a switch_back_agent cookie
+    if (!isset($_COOKIE['switch_back_agent'])) {
+        return;
+    }
+    
+    $agent_id = intval($_COOKIE['switch_back_agent']);
     
     if ($agent_id) {
         // This order is being placed by a customer who is controlled by a sales agent
