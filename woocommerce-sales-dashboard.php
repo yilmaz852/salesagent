@@ -292,14 +292,18 @@ add_action('template_redirect', function () {
     // Filters
     $filter_status = isset($_GET['order_status']) ? sanitize_text_field($_GET['order_status']) : '';
     $filter_customer = isset($_GET['customer_id']) ? intval($_GET['customer_id']) : '';
-    $filtered_orders = [];
-
-    foreach ($all_orders as $order) {
-        if ($filter_status && $order->get_status() != $filter_status) continue;
-        if ($filter_customer && $order->get_customer_id() != $filter_customer) continue;
-        $filtered_orders[] = $order;
+    
+    // Apply filters only if filters are set, otherwise use all orders
+    if ($filter_status || $filter_customer) {
+        $filtered_orders = [];
+        foreach ($all_orders as $order) {
+            if ($filter_status && $order->get_status() != $filter_status) continue;
+            if ($filter_customer && $order->get_customer_id() != $filter_customer) continue;
+            $filtered_orders[] = $order;
+        }
+    } else {
+        $filtered_orders = $all_orders;
     }
-    if (!$filtered_orders) $filtered_orders = $all_orders;
 
     ?>
 <!DOCTYPE html>
