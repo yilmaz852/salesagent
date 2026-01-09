@@ -61,13 +61,14 @@ This is the **salesagent** repository - a B2B Admin Panel system for WordPress/W
 salesagent/
 ├── README.md                   # Project documentation
 ├── copilot-instructions.md     # This file - Copilot configuration
-├── .github/                    # GitHub-specific files (workflows, etc.)
-└── [WordPress plugin files]    # B2B Admin Panel plugin files
+└── [Future WordPress plugin files]
     ├── Core admin pages: login, dashboard, orders, products, customers
     ├── B2B Pro pages: approvals, b2b-groups, b2b-settings
     ├── Custom rewrite rules for admin panel URLs
     └── Security and logging functionality
 ```
+
+**Note:** This repository is configured for a WordPress/WooCommerce B2B Admin Panel plugin. The plugin files will be added as the project develops.
 
 ## Key Features
 - **Custom URL Routing**: Custom rewrite rules for B2B admin pages (e.g., `/b2b-panel/orders`)
